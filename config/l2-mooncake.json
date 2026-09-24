@@ -1,0 +1,12 @@
+{
+  "type": "mooncake_store",
+  "protocol": "tcp",
+  "device_name": "eth0",
+  "master_server": "127.0.0.1:50051",
+  "num_workers": 8,
+  "per_op_workers": {
+    "lookup": 4,
+    "retrieve": 8,
+    "store": 4
+  }
+}
