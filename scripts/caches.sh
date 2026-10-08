@@ -16,12 +16,18 @@ for p in "${PORTS[@]}"; do
     echo ":$p  $BAD 实例不可达"; ISSUES+=1; continue
   fi
   M=$(curl -s "localhost:$p/metrics")
-  # 容量无独立指标（KV pool 含在 gpu-memory-utilization 里），给累计命中率与水位 gauge（有则显示）
   q=$(awk '/^vllm:prefix_cache_queries_total/{print $2}' <<<"$M" | head -1)
   h=$(awk '/^vllm:prefix_cache_hits_total/{print $2}'   <<<"$M" | head -1)
   rate=$(awk -v q="${q:-0}" -v h="${h:-0}" 'BEGIN{if(q>0) printf "%.1f%%", h/q*100; else print "n/a"}')
-  gauge=$(grep -oE '^vllm:(gpu_cache_usage|kv_cache_usage)[a-z_]* [0-9.]+' <<<"$M" | head -1)
-  echo ":$p  $OK 健康 | 累计命中(自启动) $rate${gauge:+ | $gauge}"
+  # L0 容量/水位/APC 开关都藏在 cache_config_info 标签里；指标带 {labels}，正则要允许
+  usage=$(grep -oE '^vllm:kv_cache_usage_perc(\{[^}]*\})? [0-9.]+' <<<"$M" | awk '{print $NF}' | head -1)
+  apc=$(grep  -oE 'enable_prefix_caching="[A-Za-z]+"'      <<<"$M" | head -1 | cut -d'"' -f2)
+  pool=$(grep -oE 'num_gpu_blocks="[0-9]+"'                <<<"$M" | head -1 | grep -oE '[0-9]+')
+  blk=$(grep  -oE '\bblock_size="[0-9]+"'                  <<<"$M" | head -1 | grep -oE '[0-9]+')
+  cap=$(( ${pool:-0} * ${blk:-0} ))
+  caps=$([ "$cap" -gt 0 ] && echo "${cap} tok" || echo "?")
+  [ "$apc" = "True" ] || [ "$apc" = "true" ] || { echo ":$p  $BAD APC 未开启(enable_prefix_caching=$apc)"; ISSUES+=1; }
+  echo ":$p  $OK APC=$apc | KV池 $caps | 用量 ${usage:-n/a} | 累计命中(自启动) $rate"
 done
 
 # ---------- L1: server 共享内存池 ----------
