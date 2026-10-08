@@ -42,7 +42,7 @@ export EVICT_POLICY="${EVICT_POLICY:-LRU}"  # 本 lmcache 构建必填（LRU/Iso
 # redis    = resp 适配器 -> 本机 Redis（立即可跑，兼容旧实验数据）
 # mooncake = mooncake_store 适配器（分布式目标；需编译 lmcache_mooncake 扩展，
 #           见 REPORT.md "L2 选型"）
-export L2_BACKEND="${L2_BACKEND:-redis}"
+export L2_BACKEND="${L2_BACKEND:-mooncake}"
 export REDIS_PORT="${REDIS_PORT:-6379}"
 export REDIS_MAXMEM="${REDIS_MAXMEM:-300gb}"   # 仅 redis 后端使用
 

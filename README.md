@@ -33,7 +33,7 @@ trace 回放全量切换到 [AIPerf](https://github.com/ai-dynamo/aiperf)。
 ```bash
 bash scripts/env_check.sh                     # 依赖自检
 
-bash scripts/start_server.sh                  # lmcache server（默认 L2=redis，连带起池）
+bash scripts/start_server.sh                  # lmcache server（默认 L2=mooncake，连带起 master）
 bash scripts/start_engine.sh 8000 0.45        # qwen3-8b 实例
 bash scripts/start_engine.sh 8001 0.42 qwen2.5-7b
 
@@ -90,12 +90,13 @@ bash scripts/rack.sh status                   # 货架面板
 
 ```bash
 L2_BACKEND=none     bash scripts/start_server.sh   # 纯 L1（隔离 L1 贡献）
-L2_BACKEND=mooncake bash scripts/start_server.sh   # 分布式后端（已编译跑通，自动连带起 mooncake_master）
+L2_BACKEND=redis    bash scripts/start_server.sh   # resp 适配器（回退 redis 池）
+L2_BACKEND=mooncake bash scripts/start_server.sh   # 分布式后端（默认，已编译跑通，自动连带起 mooncake_master）
 L1_SIZE_GB=120      bash scripts/start_server.sh   # 调 L1 容量
 ```
 
 mooncake 后端：`mooncake_master`(:50051) 纯控制面由脚本自动拉起，数据面 P2P
-（对象住 lmcache server 贡献的 64GB DRAM 段，`config/l2-mooncake.json` 可调）；
+（对象住 lmcache server 贡献的 180GB DRAM 段，`config/l2-mooncake.json` 可调）；
 master 指标 `curl localhost:9003/metrics/summary`（Keys/用量/clients）。
 构建与踩坑记录见 [REPORT.md §5.3](REPORT.md)。
 
