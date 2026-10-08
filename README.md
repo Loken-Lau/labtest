@@ -66,6 +66,8 @@ bash bench/run_aiperf.sh data/traces/conv_600s_x10.jsonl 8000 qwen3-8b
 
 ```bash
 bash scripts/status.sh 8000 8001              # server/实例/L2 三面板
+bash scripts/caches.sh 8000                   # 三级缓存容量+健康速查（L0/L1/L2 一屏）
+"$PY" scripts/hitrate.py --watch              # 动态命中率（窗口增量口径，非自启动累计）
 bash scripts/stop_engine.sh 8000              # 停单实例（缓存不丢！server 还在）
 bash scripts/start_engine.sh 8000 0.45        # 重启实例，热状态直接继承
 bash scripts/stop_server.sh                   # 全停（redis 缓存随之丢弃，可再生）
