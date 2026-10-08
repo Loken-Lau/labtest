@@ -44,6 +44,23 @@ case "$L2_BACKEND" in
     L2_ARGS+=(--l2-adapter "$(cat "$REPO_ROOT/config/l2-redis.json")")
     ;;
   mooncake)
+    # mooncake 架构（Store 2.0）：master 只做控制面(:50051)，无 store node 进程——
+    # 数据面 P2P，各 client（本 server 进程）贡献 DRAM 段（config/l2-mooncake.json
+    # 的 global_segment_size）。master 用 glog，日志在 logs/mooncake-master.log。
+    if ! ss -ltn "sport = :${MOONCAKE_MASTER_PORT}" 2>/dev/null | grep -q LISTEN; then
+      [ -x "$MOONCAKE_MASTER_BIN" ] \
+        || { echo "[FAIL] mooncake_master 不存在: $MOONCAKE_MASTER_BIN（env.sh MOONCAKE_MASTER_BIN）"; exit 1; }
+      echo "[INFO] 起 mooncake_master (:${MOONCAKE_MASTER_PORT}, 控制面)..."
+      nohup "$MOONCAKE_MASTER_BIN" \
+        --rpc_port "$MOONCAKE_MASTER_PORT" \
+        > "$LOG_DIR/mooncake-master.log" 2>&1 &
+      for i in $(seq 1 20); do
+        ss -ltn "sport = :${MOONCAKE_MASTER_PORT}" 2>/dev/null | grep -q LISTEN && break
+        sleep 0.5
+      done
+      ss -ltn "sport = :${MOONCAKE_MASTER_PORT}" 2>/dev/null | grep -q LISTEN \
+        || { echo "[FAIL] mooncake_master 30s 未就绪，查 $LOG_DIR/mooncake-master.log"; exit 1; }
+    fi
     L2_ARGS+=(--l2-adapter "$(cat "$REPO_ROOT/config/l2-mooncake.json")")
     ;;
   none) : ;;

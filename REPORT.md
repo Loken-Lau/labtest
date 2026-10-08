@@ -13,7 +13,7 @@
 |---|---|
 | 架构 | 一个 `lmcache server` 独立进程（ZMQ :5555 数据面 + HTTP :8080 控制面）+ N 个 vLLM 实例经 `LMCacheMPConnector` 接入 |
 | L1 | server 进程内**全实例共享**内存池，`--l1-size-gb`（默认 60GB，LRU）；**多模型 KV 按键共存天然隔离**（§5.5） |
-| L2 | 可插拔 `--l2-adapter`：默认 `resp`→Redis（现在能跑）；**目标 `mooncake_store`**（配置已备好，本机差一个 C++ 扩展编译） |
+| L2 | 可插拔 `--l2-adapter`：默认 `resp`→Redis；**`mooncake_store` 已编译跑通**（2026-10-07 tcp 语义验证，rdma/多节点见 §6） |
 | trace | 回放全量切到 AIPerf（mooncake_trace + fixed-schedule），自研回放器删除 |
 | sleep 秒级拉起 | `SLEEP=1` 启动 + `rack.sh sleep/wake`，唤醒实测 0.512s，热状态住 server 不丢（§5.6） |
 | 验证 | 实例重启后热状态不丢（L1 保活）；冷实例+热 L1 单请求 external 命中 91.3%、TTFT 162→70ms |
@@ -231,25 +231,58 @@ GPU APC（vLLM 自带，每实例私有，最快的命中）      ← 不归我�
 4. **H200 + 多节点演进路线一致**：RFC #3262 的分布式 MP 设计讨论也是围绕
    node-local MP server + 跨节点 store 的形态。
 
-**启用步骤（当前卡点实测确认）**：
+**启用步骤（2026-10-07 实测跑通，tcp 零 RDMA 语义验证）**：
 ```bash
-# 卡点：本机 lmcache 0.5.5 未编译 mooncake C++ 扩展（import lmcache.lmcache_mooncake 失败）
-pip uninstall lmcache
-MOONCAKE_INCLUDE_DIR=/path/to/mooncake-store/include pip install lmcache  # 需 mooncake-store 头文件
-# 起 mooncake master（元数据中心），然后：
-L2_BACKEND=mooncake bash scripts/start_server.sh
-# config/l2-mooncake.json 里的键（protocol/device_name/master_server/...）原样透传给 mooncake，
-# 具体合法键以所装 mooncake-store 版本的 ConfigDict 为准（LMCache 不解释不校验）。
-# 分布式时：多台机各跑一个 lmcache server，同一份 l2-mooncake.json 指向同一 master，
-# vLLM 连本机 server（LMS_HOST 改远端 IP 即可跨机）。
+# 构建产物都在 ~/build/mooncake-l2（源码 mooncake-src/ + 安装前缀 mooncake-install/，一键复刻见下）
+L2_BACKEND=mooncake bash scripts/start_server.sh   # 自动连带起 mooncake_master(:50051)
 ```
+Mooncake Store 2.0 架构要点（与旧认知的差异）：**没有独立 store node 进程**——
+`mooncake_master` 只做控制面（:50051 RPC + :9003 admin 指标），数据面 P2P，
+**各 client（即 lmcache server 进程）贡献 DRAM 段**组成池子
+（`global_segment_size`，config/l2-mooncake.json 现为 180GB——**必须 > L1 容量**，
+否则 L1 滚一轮时 L2 同轮淘汰对象，取回实验假阴性）。TE 对等发现用
+`metadata_server:"P2PHANDSHAKE"` 字面量，**不需要 etcd/redis 元数据服务**。
+键名注意：master 地址键是 `master_server_addr`（不是 master_server），
+协议键 `protocol`（tcp|rdma），`rdma_devices`（不是 device_name）。
+
+构建配方（无 sudo，全部用户态；只记录关键坑，完整命令见 ~/build/mooncake-l2/）：
+```bash
+# 1) mooncake v0.3.13.post1 源码（依赖机器上都有：zstd/xxhash/glog/gflags/jsoncpp/yaml-cpp/numa/liburing/ibverbs；yalantinglibs 走 FetchContent）
+git clone --depth 1 -b v0.3.13.post1 https://github.com/kvcache-ai/Mooncake && git submodule update --init extern/pybind11
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DWITH_STORE_RUST=OFF \
+      -DWITH_P2P_STORE=OFF -DWITH_EP=OFF -DBUILD_UNIT_TESTS=OFF -DBUILD_EXAMPLES=OFF -DUSE_CUDA=OFF \
+      -DCMAKE_INSTALL_PREFIX=<prefix>       # 系统 cmake 3.16 太老，用 pip 装的 cmake 4.x
+cmake --build build --target mooncake_store mooncake_master -- -j64 && cmake --install build  # install 末尾对未编的测试目标报错可忽略
+patchelf --set-rpath '$ORIGIN' <prefix>/lib/libmooncake_store.so   # 关键：默认无 rpath，且要放一份真系统 libffi.so.7 进 <prefix>/lib
+#   （conda python 的 RPATH $ORIGIN/../lib 里有个"假"libffi.so.7=ffi8，p11-kit 要真 ffi7 的 LIBFFI_BASE_7.0 符号，不放会 ImportError）
+# 2) lmcache 0.5.5 源码重装（原 wheel 无 mooncake 扩展）
+SETUPTOOLS_SCM_PRETEND_VERSION=0.5.5 BUILD_MOONCAKE=1 \
+  MOONCAKE_INCLUDE_DIR="mooncake-src/mooncake-store/include;.../cachelib_memory_allocator{,/include,/fake_include};build/mooncake-store/include;mooncake-transfer-engine/include;mooncake-common/include;build/_deps/yalantinglibs-src/include" \
+  MOONCAKE_LIB_DIR=<prefix>/lib \
+  pip install --no-build-isolation --no-deps --force-reinstall .   # 需先装 grpcio-tools==1.78.0（protobuf 代码生成）
+```
+验证记录（2026-10-07）：server /status 适配器 active=1；master :9003 `Clients:1, Mem Storage 64GB`；
+smoke 写入后 **master 立即可见 `Keys:10 / 360MB`——mooncake 路径的 L2 写穿是即时的**
+（对比 §5.4 redis 的滞后批量写穿，做对照实验时口径不同要留意）。
+**L2 取回路径也端到端验证**（`checks/l2_retrieve.py`，可复跑）：L1 水位滚一轮逐出 probe →
+冷实例重放 → `external hits 2048/2106 (97%)`，server 日志铁证
+`Prefetch request completed: 8/8 retained keys (0 L1, 8 L2) in 122.1ms`。
+排障教训（三个假阴性，都记下来防再踩）：
+1. mooncake 池容量 ≥ L1 才能保住被逐出的对象——首测 64GB 池被灌满时 master 自己
+   淘汰了 probe（`Eviction: keys=1058`），"查无此键"是真 miss 不是链路坏；
+2. master :9003 的 `Get/Exist` 是**每秒速率**非累计值，空闲时采样恒 0，要在 burst 中采；
+3. lookup 日志行 `(N L1, M L2)` 是最可靠的分层证据（DEBUG 级更全）。
+单机注意：mooncake 数据住在 lmcache server 自己贡献的段里，**server 重启 L2 也丢**
+（redis 时代 L2 在外部进程可幸存）；多 client 贡献段才是它分布式价值的形态。
+分布式时：多台机各跑一个 lmcache server，同一份 l2-mooncake.json 指向同一 master，
+vLLM 连本机 server（LMS_HOST 改远端 IP 即可跨机）。
 
 **完整 L2 选项表（本机 lmcache 0.5.5 注册的 17 个适配器）**：
 
 | 适配器 | 本机可用 | 定位 / 什么时候选 |
 |---|---|---|
 | **resp** | ✅（默认） | Redis/Valkey 单机或集群，运维熟、兼容旧实验 |
-| **mooncake_store** | ⚠️ 需编译 | **分布式/RDMA 优先项**（见上） |
+| **mooncake_store** | ✅ 已编译跑通(tcp) | **分布式/RDMA 优先项**（见上） |
 | fs / fs_native | ✅ | 本地 NVMe 文件层——大容量、断电不丢；fs_native 是原生实现更快。无 RDMA 时的单机扩容选项 |
 | valkey | ✅ | 同 resp，面向 Valkey 部署 |
 | s3 | ✅ | 对象存储——跨机房容灾、冷数据；延迟高不适合热路径 |
@@ -370,12 +403,12 @@ sleep 会丢实例的 GPU KV，但 server 里的 KV 不动，唤醒后直接取�
 ## 6. 分布式演进路线（建议顺序）
 
 ```
-现在        单机: 1×lmcache server(L1 60G + L2 redis) + 2×vLLM   ← 本仓库，已验证
-下一步(a)   L2 换 mooncake_store(protocol=tcp, 单 master)         ← 零 RDMA 也能先跑通语义
-下一步(b)   protocol=rdma + 多 HCA                                ← 解决"取回运费"问题
-之后(c)     多节点: 每节点 1×MP server, 共享同一 mooncake master   ← L2 全局共享, L1 节点本地
-可选(d)     打开 coordinator(--coordinator-url)                    ← 多 server 注册/发现/事件
-可选(e)     p2p 或 nixl_store 适配器对照实验                        ← 无中心 vs 中心化 store
+已完成      单机: 1×lmcache server(L1 60G + L2 redis) + 2×vLLM        ← 已验证
+已完成(a)   L2 换 mooncake_store(protocol=tcp, 单 master)             ← 2026-10-07 语义跑通（§5.3）
+下一步(b)   protocol=rdma + 多 HCA                                     ← 解决"取回运费"问题（本机 5×mlx5 就绪）
+之后(c)     多节点: 每节点 1×MP server, 共享同一 mooncake master       ← L2 全局共享, L1 节点本地
+可选(d)     打开 coordinator(--coordinator-url)                        ← 多 server 注册/发现/事件
+可选(e)     p2p 或 nixl_store 适配器对照实验                            ← 无中心 vs 中心化 store
 ```
 
 每一步都只动 `env.sh`/`config/`，主体代码零改动——这是把配置收敛到 server 端的最大红利。
@@ -416,6 +449,7 @@ server 侧另有 `/status`：L1 的对象数/内存/TTL、store_controller 的�
 | 6 | window.py 与旧 lab 交叉验证 | 同参数切窗 802 条 = 旧 lab 手工产物 801 条 ✓ |
 | 7 | SLEEP=1 实例 + rack.sh（§5.6） | 睡 7.8s/GPU 43G→2.2G；**唤醒 0.512s**；唤醒后 external hits 3072（server L1 取回）；稳态 TTFT 40-56ms |
 | 8 | **全量 conversation 回放**（6060 条/59min，冷缓存，qwen3-8b@0.30） | **合计命中率 36.61% vs 理论上限 36.35%（100.7%，捡边角）**；gpu_apc 19.6% + external 21.17%；TTFT p50 369/p99 2971ms；吞吐 1.7 req/s；L1 终态 1243 对象/46.9GB；redis 打满 300GB 逐出 40831 键（L2 写穿实证，§5.4） |
+| 9 | **mooncake L2 上线**（2026-10-07，§5.3） | 扩展编译安装；`mooncake_master` 自动拉起；写穿即时（smoke 级即 Keys 可见）；L1 水位淘汰写穿 L2（滚 60GB 全部落 mooncake）；**L2 取回 97%**（`0 L1, 8 L2`，§5.3 验证记录） |
 
 附带修掉的实施 bug（都是跑出来的）：`--eviction-policy` 必填、env.sh 覆盖
 外部环境变量、aiperf 参数名 `--output-artifact-dir`、smoke 正则漏标签、
@@ -423,8 +457,9 @@ subprocess `~` 不展开。
 
 ## 9. 已知局限 / 下一步
 
-- mooncake 扩展未编译（§5.3 卡点），`L2_BACKEND=mooncake` 会起不来——按步骤装即可。
-- L2 写穿时机待长窗口实验确认（§5.4）。
+- ~~mooncake 扩展未编译（§5.3 卡点）~~ → **已解决并实测跑通**（2026-10-07，tcp 语义；
+  下一步 protocol=rdma + 多 HCA，再往后多节点）。
+- L2 写穿时机待长窗口实验确认（§5.4；注意 mooncake 路径写穿是即时的，与 redis 口径不同）。
 - `--max-workers`/`--max-gpu-workers`/`--max-cpu-workers`、prefetch 旋钮未调优，
   上 RDMA 前建议先扫一遍。
 - trace 只有 Mooncake 三条；aiperf 还支持 baseten/bailian 等 loader，加格式即用。

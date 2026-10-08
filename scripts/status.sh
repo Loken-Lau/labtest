@@ -45,5 +45,15 @@ case "$L2_BACKEND" in
     else
       echo "  [DOWN] redis 未运行"
     fi ;;
+  mooncake)
+    if ss -ltn "sport = :${MOONCAKE_MASTER_PORT:-50051}" 2>/dev/null | grep -q LISTEN; then
+      echo "  master : up (:${MOONCAKE_MASTER_PORT})"
+      pgrep -x mooncake_master >/dev/null \
+        && ps -o rss= -p "$(pgrep -x mooncake_master | head -1)" \
+           | awk '{printf "  master rss : %.0f MB\n", $1/1024}'
+    else
+      echo "  master : [DOWN] :${MOONCAKE_MASTER_PORT:-50051}"
+    fi
+    echo "  （对象数/水位看上方 server /status 的 adapters 段）" ;;
   *) echo "  （观测方式见 REPORT.md）" ;;
 esac

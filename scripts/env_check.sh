@@ -33,8 +33,13 @@ case "$L2_BACKEND" in
     ;;
   mooncake)
     "$PY" -c "import lmcache.lmcache_mooncake" >/dev/null 2>&1 \
-      && ok "lmcache_mooncake 原生扩展已装" \
-      || bad "lmcache_mooncake 扩展未编译。需 MOONCAKE_INCLUDE_DIR=<mooncake-store 源码> 重装 lmcache（见 REPORT.md L2 选型）"
+      && ok "lmcache_mooncake 原生扩展已装（源码重装 lmcache，产物在 ~/build/mooncake-l2）" \
+      || bad "lmcache_mooncake 扩展未编译。需按 REPORT.md §5.3 从源码重装 lmcache（BUILD_MOONCAKE=1 + MOONCAKE_INCLUDE_DIR/LIB_DIR，构建记录在 ~/build/mooncake-l2/lmcache-build4.log）"
+    [ -x "$MOONCAKE_MASTER_BIN" ] && ok "mooncake_master: $MOONCAKE_MASTER_BIN" \
+                                      || bad "mooncake_master 不存在: $MOONCAKE_MASTER_BIN"
+    [ -f "$(dirname "$MOONCAKE_MASTER_BIN")/../lib/libmooncake_store.so" ] \
+      && ok "libmooncake_store.so 就位" \
+      || warnf "libmooncake_store.so 缺失（扩展运行时依赖）"
     ;;
   none)
     warnf "L2_BACKEND=none：仅 server L1，无持久层"

@@ -46,6 +46,14 @@ export L2_BACKEND="${L2_BACKEND:-redis}"
 export REDIS_PORT="${REDIS_PORT:-6379}"
 export REDIS_MAXMEM="${REDIS_MAXMEM:-300gb}"   # 仅 redis 后端使用
 
+# ---- mooncake（L2_BACKEND=mooncake 时使用）----
+# 构建产物在 ~/build/mooncake-l2（源码 mooncake-src/ + 安装 mooncake-install/），
+# lmcache_mooncake 扩展已编进 vllm env 的 lmcache（源码 LMCache-0.5.5/ 重装）。
+# master 是纯控制面进程（:50051），数据面 P2P（metadata_server=P2PHANDSHAKE，
+# 数据住各 client 贡献的 DRAM 段，无独立 store node 进程）。
+export MOONCAKE_MASTER_BIN="${MOONCAKE_MASTER_BIN:-$HOME/build/mooncake-l2/mooncake-install/bin/mooncake_master}"
+export MOONCAKE_MASTER_PORT="${MOONCAKE_MASTER_PORT:-50051}"   # 仅探活用，地址改 config/l2-mooncake.json
+
 # ---- vLLM 实例 ----
 export MAXLEN="${MAXLEN:-8192}"
 

@@ -1,12 +1,15 @@
 {
   "type": "mooncake_store",
-  "protocol": "tcp",
-  "device_name": "eth0",
-  "master_server": "127.0.0.1:50051",
   "num_workers": 8,
   "per_op_workers": {
     "lookup": 4,
     "retrieve": 8,
     "store": 4
-  }
+  },
+  "local_hostname": "localhost",
+  "metadata_server": "P2PHANDSHAKE",
+  "master_server_addr": "127.0.0.1:50051",
+  "protocol": "tcp",
+  "global_segment_size": "193273528320",
+  "local_buffer_size": "1073741824"
 }

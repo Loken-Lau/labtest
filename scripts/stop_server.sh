@@ -13,3 +13,8 @@ fi
 if [ "${1:-}" != "--keep-redis" ] && "$REDIS_CLI" -p "$REDIS_PORT" ping >/dev/null 2>&1; then
   "$REDIS_CLI" -p "$REDIS_PORT" shutdown nosave 2>/dev/null && echo "[OK] redis(:${REDIS_PORT}) 已停（缓存丢弃，可再生）"
 fi
+
+# mooncake master 是独立控制面进程，连带停（对象元数据随之丢弃，可再生）
+if pgrep -x mooncake_master >/dev/null 2>&1; then
+  pkill -x mooncake_master && echo "[OK] mooncake_master(:${MOONCAKE_MASTER_PORT:-50051}) 已停"
+fi

@@ -90,9 +90,14 @@ bash scripts/rack.sh status                   # 货架面板
 
 ```bash
 L2_BACKEND=none     bash scripts/start_server.sh   # 纯 L1（隔离 L1 贡献）
-L2_BACKEND=mooncake bash scripts/start_server.sh   # 分布式目标（需编译扩展，见 REPORT.md）
+L2_BACKEND=mooncake bash scripts/start_server.sh   # 分布式后端（已编译跑通，自动连带起 mooncake_master）
 L1_SIZE_GB=120      bash scripts/start_server.sh   # 调 L1 容量
 ```
+
+mooncake 后端：`mooncake_master`(:50051) 纯控制面由脚本自动拉起，数据面 P2P
+（对象住 lmcache server 贡献的 64GB DRAM 段，`config/l2-mooncake.json` 可调）；
+master 指标 `curl localhost:9003/metrics/summary`（Keys/用量/clients）。
+构建与踩坑记录见 [REPORT.md §5.3](REPORT.md)。
 
 ## 依赖位置（不在本仓库）
 
